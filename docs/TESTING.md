@@ -28,7 +28,8 @@
 本地（如有 Mac）等价命令：
 
 ```bash
-xcodegen generate --spec project.yml --project DietTracker.xcodeproj
+xcodegen generate --spec project.yml
+# 注意：--project 是「输出目录」不是文件名，传 DietTracker.xcodeproj 会生成嵌套目录
 xcodebuild test \
   -project DietTracker.xcodeproj -scheme DietTracker \
   -destination 'platform=iOS Simulator,name=iPhone 16' \

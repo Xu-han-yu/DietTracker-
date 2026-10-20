@@ -59,7 +59,10 @@ jobs:
 
       - name: Generate Xcode project
         run: |
-          xcodegen generate --spec project.yml --project DietTracker.xcodeproj
+          # 注意：xcodegen 的 --project 参数是「输出目录」而非工程文件名，
+          # 不要传 DietTracker.xcodeproj（会生成嵌套的 DietTracker.xcodeproj/DietTracker.xcodeproj）。
+          # 省略 --project 即在 spec 所在目录生成 <name>.xcodeproj。
+          xcodegen generate --spec project.yml
           xcodebuild -list -project DietTracker.xcodeproj
 
       - name: Lint for hardcoded style values
