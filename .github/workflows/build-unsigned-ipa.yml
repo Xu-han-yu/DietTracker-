@@ -1,128 +1,67 @@
-name: Build Unsigned IPA
+//
+//  METExerciseCalorieService.swift
+//  DietTracker
+//
+//  运动消耗估算：kcal = MET × 体重kg × 小时数
+//
+//  硬约束：
+//   · 查不到运动时回退到 `ExerciseFallback.met`（中等强度一般运动），并**必须**标记 isFallback。
+//   · 结果里冗余存 `metValue` / `weightKgAtEstimate` / `estimatorVersion`，
+//     这样用户改了体重后历史记录的数字不会跟着变（可复现性验收项）。
+//
 
-on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
-  workflow_dispatch:
-    inputs:
-      runner:
-        description: "Runner image (macos-15 = Xcode 16.x)"
-        required: false
-        default: "macos-15"
-      configuration:
-        description: "Build configuration"
-        required: false
-        default: "Release"
-      bundle_id:
-        description: "Bundle identifier override"
-        required: false
-        default: "com.yourname.diettracker"
+import Foundation
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+struct METExerciseCalorieService: ExerciseCalorieService {
 
-env:
-  SCHEME: DietTracker
-  PROJECT: DietTracker.xcodeproj
-  CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
-  BUNDLE_ID: ${{ github.event.inputs.bundle_id || 'com.yourname.diettracker' }}
+    func estimate(parsed: ParsedExercise,
+                  weightKg: Double,
+                  defaultIntensity: ExerciseIntensity) -> ExerciseEstimate {
 
-jobs:
-  build:
-    name: Build unsigned .ipa
-    runs-on: ${{ github.event.inputs.runner || 'macos-15' }}
-    timeout-minutes: 30
+        let weight = weightKg > 0 ? weightKg : ExerciseFallback.defaultWeightKg
+        // 兜底并限幅：时长不可能为负，超过上限多半是误输入
+        let minutes = min(max(parsed.minutes ?? ExerciseFallback.defaultMinutes, 0),
+                          ExerciseFallback.maxMinutes)
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+        let intensity = parsed.intensity ?? defaultIntensity
 
-      - name: Show toolchain
-        run: |
-          echo "DEVELOPER_DIR = $(xcode-select -p)"
-          xcodebuild -version
-          swift --version
+        if let id = parsed.matchedExerciseID,
+           let met = metValue(exerciseID: id, intensity: intensity) {
+            let kcal = METFormula.kcal(met: met, weightKg: weight, minutes: minutes)
+            return ExerciseEstimate(
+                name: parsed.name,
+                matchedExerciseID: id,
+                minutes: minutes,
+                intensity: intensity,
+                metValue: met,
+                kcal: kcal,
+                isFallback: false,
+                weightKgAtEstimate: weight,
+                confidence: parsed.confidence,
+                estimatorVersion: EstimatorVersion.exerciseMET
+            )
+        }
 
-      - name: Install XcodeGen
-        run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
-          xcodegen --version
+        // 未命中：回退到「中等强度一般运动」，明确标注为估算
+        let met = ExerciseFallback.met
+        let kcal = METFormula.kcal(met: met, weightKg: weight, minutes: minutes)
+        let name = parsed.name.isEmpty ? ExerciseFallback.name : parsed.name
 
-      - name: Generate Xcode project
-        run: |
-          # 注意：xcodegen 的 --project 是「输出目录」而不是工程文件名。
-          # 传 DietTracker.xcodeproj 会生成嵌套目录导致 xcodebuild 找不到工程，
-          # 所以这里省略 --project，让它在 spec 所在目录生成 <name>.xcodeproj。
-          xcodegen generate --spec project.yml
-          xcodebuild -list -project "$PROJECT"
+        return ExerciseEstimate(
+            name: name,
+            matchedExerciseID: nil,
+            minutes: minutes,
+            intensity: intensity,
+            metValue: met,
+            kcal: kcal,
+            isFallback: true,
+            weightKgAtEstimate: weight,
+            confidence: Swift.min(parsed.confidence, 0.35),
+            estimatorVersion: EstimatorVersion.exerciseMET
+        )
+    }
 
-      - name: Build unsigned .app
-        run: |
-          set -o pipefail
-          xcodebuild clean build \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -configuration "$CONFIGURATION" \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
-            EXPANDED_CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            PROVISIONING_PROFILE="" \
-            ONLY_ACTIVE_ARCH=NO 2>&1 | tee xcodebuild-build.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            echo "### 编译错误（error 行，最多 80 条）" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            grep -E "error:" xcodebuild-build.log | head -80 >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit $status
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: xcodebuild-build.log
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Package Payload into unsigned .ipa
-        run: |
-          APP="build/DerivedData/Build/Products/${CONFIGURATION}-iphoneos/DietTracker.app"
-          if [ ! -d "$APP" ]; then
-            echo "::error::App bundle not found at $APP"
-            exit 1
-          fi
-          rm -rf Payload
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          find Payload $ -name '._*' -o -name '.DS_Store' $ -delete
-          rm -rf "Payload/DietTracker.app/_CodeSignature"
-          zip -qryX "DietTracker-unsigned.ipa" Payload
-          rm -rf Payload
-          echo "--- ipa contents (top) ---"
-          unzip -l "DietTracker-unsigned.ipa" | head -25
-          echo "--- size ---"
-          ls -lh "DietTracker-unsigned.ipa"
-
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: DietTracker-unsigned-ipa
-          path: DietTracker-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 90
+    func metValue(exerciseID: String, intensity: ExerciseIntensity) -> Double? {
+        ExerciseDatabase.entry(id: exerciseID)?.met(for: intensity)
+    }
+}
