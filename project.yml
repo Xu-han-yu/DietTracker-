@@ -1,9 +1,13 @@
-# DietTracker — XcodeGen 工程定义
-# 云端构建：xcodegen generate -> xcodebuild (CODE_SIGNING_ALLOWED=NO) -> zip Payload -> 未签名 IPA
+# DietTracker — XcodeGen 工程定义（适配「源码在仓库根目录」的 GitHub 仓库）
 #
-# 修改 Bundle ID 只需改本文件两处：
-#   1) options.bundleIdPrefix
-#   2) settings.base.PRODUCT_BUNDLE_IDENTIFIER
+# 适用前提：仓库根目录下直接是 App/ Data/ Models/ Persistence/ Resources/ Services/ Theme/ Views/
+#           （而不是 DietTracker/App/... 这种二级结构）
+#
+# 本版本已移除 DietTrackerTests 目标 —— 因为该仓库没有 DietTrackerTests/ 目录，
+# 保留会导致：Spec validation error: Target "DietTrackerTests" has a missing source directory
+#
+# 以后想加回单测：在仓库根建 DietTrackerTests/ 目录并放入测试文件，
+# 再把下面 targets 里的 DietTrackerTests 段 + schemes 的 test 段加回来即可。
 
 name: DietTracker
 
@@ -13,7 +17,7 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
   groupSortPosition: top
-  autoGenerateSchemes: true
+  autoGenerateSchemes: false
 
 settings:
   base:
@@ -61,43 +65,28 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: DietTracker
-        excludes:
-          - "Resources/Info.plist"
+      # 逐目录列出，避开 Resources/Info.plist（它由下面的 info.path 单独指定）
+      - path: App
+      - path: Data
+      - path: Models
+      - path: Persistence
+      - path: Services
+      - path: Theme
+      - path: Views
+      - path: Resources/Assets.xcassets
     info:
-      path: DietTracker/Resources/Info.plist
+      path: Resources/Info.plist
     settings:
       base:
         INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "AccentColor"
 
-  DietTrackerTests:
-    type: bundle.unit-test
-    platform: iOS
-    deploymentTarget: "17.0"
-    sources:
-      - path: DietTrackerTests
-    dependencies:
-      - target: DietTracker
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.diettracker.tests
-        CODE_SIGNING_ALLOWED: "NO"
-        CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGN_IDENTITY: ""
-
-# 显式 scheme：跑 `xcodebuild test -scheme DietTracker` 时会执行 DietTrackerTests。
+# 单一 scheme：只有 build + run，无测试 action（该仓库无测试目标）
 schemes:
   DietTracker:
     build:
       targets:
         DietTracker: all
-        DietTrackerTests: [test]
     run:
       config: Debug
-    test:
-      config: Debug
-      gatherCoverageData: false
-      targets:
-        - DietTrackerTests
