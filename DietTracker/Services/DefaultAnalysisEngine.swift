@@ -87,7 +87,7 @@ extension Array where Element == DailySummary {
     func trendSnapshot(windowDays: Int) -> TrendSnapshot {
         let sorted = recordedAndSorted
         let window = windowDays > 0 ? Array(sorted.suffix(windowDays)) : sorted
-        guard !window.isEmpty else { return .empty(windowDays: max(windowDays, 1)) }
+        guard !window.isEmpty else { return .empty(windowDays: Swift.max(windowDays, 1)) }
 
         let count = Double(window.count)
         var averages: [Nutrient: Double] = [:]
@@ -98,7 +98,7 @@ extension Array where Element == DailySummary {
         let intake = window.reduce(0) { $0 + $1.intake.kcal } / count
         let burn = window.reduce(0) { $0 + $1.burnKcal } / count
 
-        return TrendSnapshot(windowDays: max(windowDays, 1),
+        return TrendSnapshot(windowDays: Swift.max(windowDays, 1),
                              recordedDays: window.count,
                              averages: averages,
                              averageIntakeKcal: intake,
