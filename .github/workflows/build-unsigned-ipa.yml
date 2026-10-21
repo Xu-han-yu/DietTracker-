@@ -1,67 +1,70 @@
-//
-//  METExerciseCalorieService.swift
-//  DietTracker
-//
-//  运动消耗估算：kcal = MET × 体重kg × 小时数
-//
-//  硬约束：
-//   · 查不到运动时回退到 `ExerciseFallback.met`（中等强度一般运动），并**必须**标记 isFallback。
-//   · 结果里冗余存 `metValue` / `weightKgAtEstimate` / `estimatorVersion`，
-//     这样用户改了体重后历史记录的数字不会跟着变（可复现性验收项）。
-//
+name: Build Unsigned IPA
 
-import Foundation
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
 
-struct METExerciseCalorieService: ExerciseCalorieService {
+jobs:
+  build:
+    name: Build unsigned .ipa
+    runs-on: macos-15
+    timeout-minutes: 30
 
-    func estimate(parsed: ParsedExercise,
-                  weightKg: Double,
-                  defaultIntensity: ExerciseIntensity) -> ExerciseEstimate {
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        let weight = weightKg > 0 ? weightKg : ExerciseFallback.defaultWeightKg
-        // 兜底并限幅：时长不可能为负，超过上限多半是误输入
-        let minutes = min(max(parsed.minutes ?? ExerciseFallback.defaultMinutes, 0),
-                          ExerciseFallback.maxMinutes)
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
 
-        let intensity = parsed.intensity ?? defaultIntensity
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate --spec project.yml
 
-        if let id = parsed.matchedExerciseID,
-           let met = metValue(exerciseID: id, intensity: intensity) {
-            let kcal = METFormula.kcal(met: met, weightKg: weight, minutes: minutes)
-            return ExerciseEstimate(
-                name: parsed.name,
-                matchedExerciseID: id,
-                minutes: minutes,
-                intensity: intensity,
-                metValue: met,
-                kcal: kcal,
-                isFallback: false,
-                weightKgAtEstimate: weight,
-                confidence: parsed.confidence,
-                estimatorVersion: EstimatorVersion.exerciseMET
-            )
-        }
+      - name: Build unsigned .app
+        run: |
+          set -o pipefail
+          xcodebuild clean build \
+            -project DietTracker.xcodeproj \
+            -scheme DietTracker \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            PROVISIONING_PROFILE="" \
+            ONLY_ACTIVE_ARCH=NO
 
-        // 未命中：回退到「中等强度一般运动」，明确标注为估算
-        let met = ExerciseFallback.met
-        let kcal = METFormula.kcal(met: met, weightKg: weight, minutes: minutes)
-        let name = parsed.name.isEmpty ? ExerciseFallback.name : parsed.name
-
-        return ExerciseEstimate(
-            name: name,
-            matchedExerciseID: nil,
-            minutes: minutes,
-            intensity: intensity,
-            metValue: met,
-            kcal: kcal,
-            isFallback: true,
-            weightKgAtEstimate: weight,
-            confidence: Swift.min(parsed.confidence, 0.35),
-            estimatorVersion: EstimatorVersion.exerciseMET
-        )
-    }
-
-    func metValue(exerciseID: String, intensity: ExerciseIntensity) -> Double? {
-        ExerciseDatabase.entry(id: exerciseID)?.met(for: intensity)
-    }
-}
+      - name: Package Payload into unsigned .ipa
+        run: |
+          APP="build/DerivedData/Build/Products/Release-iphoneos/DietTracker.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::App bundle not found at $APP"
+            exit 1
+          fi
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          find Payload \( -name '._*' -o -name '.DS_Store' \) -delete
+          rm -rf "Payload/DietTracker.app/_CodeSignature"
+          zip -qryX "DietTracker-unsigned.ipa" Payload
+          rm -rf Payload
+          
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DietTracker-unsigned-ipa
+          path: DietTracker-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 90
