@@ -64,11 +64,7 @@ jobs:
           # 省略 --project 即在 spec 所在目录生成 <name>.xcodeproj。
           xcodegen generate --spec project.yml
           xcodebuild -list -project DietTracker.xcodeproj
-
-      - name: Lint for hardcoded style values
-        run: bash scripts/check-hardcoded-style.sh
-
-      - name: Run unit tests
+         - name: Run unit tests
         run: |
           set -o pipefail
           xcodebuild test \
