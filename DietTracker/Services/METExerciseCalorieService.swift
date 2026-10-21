@@ -37,8 +37,8 @@ struct METExerciseCalorieService: ExerciseCalorieService {
                 kcal: kcal,
                 isFallback: false,
                 weightKgAtEstimate: weight,
-                estimatorVersion: EstimatorVersion.exerciseMET,
-                confidence: parsed.confidence
+                confidence: parsed.confidence,
+                estimatorVersion: EstimatorVersion.exerciseMET
             )
         }
 
@@ -56,8 +56,8 @@ struct METExerciseCalorieService: ExerciseCalorieService {
             kcal: kcal,
             isFallback: true,
             weightKgAtEstimate: weight,
-            estimatorVersion: EstimatorVersion.exerciseMET,
-            confidence: min(parsed.confidence, 0.35)
+            confidence: Swift.min(parsed.confidence, 0.35),
+            estimatorVersion: EstimatorVersion.exerciseMET
         )
     }
 
