@@ -3,38 +3,75 @@ name: Build Unsigned IPA
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner image (macos-15 = Xcode 16.x)"
+        required: false
+        default: "macos-15"
+      configuration:
+        description: "Build configuration"
+        required: false
+        default: "Release"
+      bundle_id:
+        description: "Bundle identifier override"
+        required: false
+        default: "com.yourname.diettracker"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: DietTracker
+  PROJECT: DietTracker.xcodeproj
+  CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
+  BUNDLE_ID: ${{ github.event.inputs.bundle_id || 'com.yourname.diettracker' }}
 
 jobs:
   build:
     name: Build unsigned .ipa
-    runs-on: macos-15
+    runs-on: ${{ github.event.inputs.runner || 'macos-15' }}
     timeout-minutes: 30
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Show toolchain
+        run: |
+          echo "DEVELOPER_DIR = $(xcode-select -p)"
+          xcodebuild -version
+          swift --version
 
       - name: Install XcodeGen
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then
             brew install xcodegen
           fi
+          xcodegen --version
 
       - name: Generate Xcode project
         run: |
+          # 注意：xcodegen 的 --project 是「输出目录」而不是工程文件名。
+          # 传 DietTracker.xcodeproj 会生成嵌套目录导致 xcodebuild 找不到工程，
+          # 所以这里省略 --project，让它在 spec 所在目录生成 <name>.xcodeproj。
           xcodegen generate --spec project.yml
+          xcodebuild -list -project "$PROJECT"
 
       - name: Build unsigned .app
         run: |
           set -o pipefail
           xcodebuild clean build \
-            -project DietTracker.xcodeproj \
-            -scheme DietTracker \
-            -configuration Release \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -44,11 +81,28 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             PROVISIONING_PROFILE="" \
-            ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO 2>&1 | tee xcodebuild-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "### 编译错误（error 行，最多 80 条）" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "error:" xcodebuild-build.log | head -80 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: xcodebuild-build.log
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Package Payload into unsigned .ipa
         run: |
-          APP="build/DerivedData/Build/Products/Release-iphoneos/DietTracker.app"
+          APP="build/DerivedData/Build/Products/${CONFIGURATION}-iphoneos/DietTracker.app"
           if [ ! -d "$APP" ]; then
             echo "::error::App bundle not found at $APP"
             exit 1
@@ -56,11 +110,15 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          find Payload \( -name '._*' -o -name '.DS_Store' \) -delete
+          find Payload $ -name '._*' -o -name '.DS_Store' $ -delete
           rm -rf "Payload/DietTracker.app/_CodeSignature"
           zip -qryX "DietTracker-unsigned.ipa" Payload
           rm -rf Payload
-          
+          echo "--- ipa contents (top) ---"
+          unzip -l "DietTracker-unsigned.ipa" | head -25
+          echo "--- size ---"
+          ls -lh "DietTracker-unsigned.ipa"
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
