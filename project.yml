@@ -1,92 +1,21 @@
-# DietTracker — XcodeGen 工程定义（适配「源码在仓库根目录」的 GitHub 仓库）
-#
-# 适用前提：仓库根目录下直接是 App/ Data/ Models/ Persistence/ Resources/ Services/ Theme/ Views/
-#           （而不是 DietTracker/App/... 这种二级结构）
-#
-# 本版本已移除 DietTrackerTests 目标 —— 因为该仓库没有 DietTrackerTests/ 目录，
-# 保留会导致：Spec validation error: Target "DietTrackerTests" has a missing source directory
-#
-# 以后想加回单测：在仓库根建 DietTrackerTests/ 目录并放入测试文件，
-# 再把下面 targets 里的 DietTrackerTests 段 + schemes 的 test 段加回来即可。
-
 name: DietTracker
-
 options:
   bundleIdPrefix: com.yourname
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
-  groupSortPosition: top
-  autoGenerateSchemes: false
-
-settings:
-  base:
-    PRODUCT_NAME: DietTracker
-    PRODUCT_BUNDLE_IDENTIFIER: com.yourname.diettracker
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    TARGETED_DEVICE_FAMILY: "1,2"
-    SWIFT_VERSION: "5.10"
-    SWIFT_EMIT_LOC_STRINGS: "YES"
-    ENABLE_PREVIEWS: "YES"
-    CLANG_ENABLE_MODULES: "YES"
-    SWIFT_STRICT_CONCURRENCY: "minimal"
-    LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
-    # ---- 未签名构建核心设置（不要改成 Automatic）----
-    CODE_SIGN_STYLE: "Manual"
-    CODE_SIGNING_ALLOWED: "NO"
-    CODE_SIGNING_REQUIRED: "NO"
-    CODE_SIGN_IDENTITY: ""
-    CODE_SIGN_ENTITLEMENTS: ""
-    EXPANDED_CODE_SIGN_IDENTITY: ""
-    DEVELOPMENT_TEAM: ""
-    PROVISIONING_PROFILE_SPECIFIER: ""
-    PROVISIONING_PROFILE: ""
-    # ---- 外部营养 API 占位（留空 = 关闭增强，纯本地）----
-    NUTRITION_API_BASE_URL: ""
-    NUTRITION_API_KEY: ""
-  configs:
-    Debug:
-      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
-      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-      DEBUG_INFORMATION_FORMAT: "dwarf"
-      ENABLE_TESTABILITY: "YES"
-      ONLY_ACTIVE_ARCH: "YES"
-    Release:
-      SWIFT_OPTIMIZATION_LEVEL: "-O"
-      SWIFT_COMPILATION_MODE: "wholemodule"
-      DEBUG_INFORMATION_FORMAT: "dwarf-with-dsym"
-      ENABLE_NS_ASSERTIONS: "NO"
-      VALIDATE_PRODUCT: "NO"
-      ONLY_ACTIVE_ARCH: "NO"
 
 targets:
   DietTracker:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
     sources:
-      # 逐目录列出，避开 Resources/Info.plist（它由下面的 info.path 单独指定）
-      - path: App
-      - path: Data
-      - path: Models
-      - path: Persistence
-      - path: Services
-      - path: Theme
-      - path: Views
-      - path: Resources/Assets.xcassets
-    info:
-      path: Resources/Info.plist
+      - path: DietTracker  # 这里修正了，因为你的源码都在这个文件夹里
     settings:
       base:
-        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
-        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "AccentColor"
-
-# 单一 scheme：只有 build + run，无测试 action（该仓库无测试目标）
-schemes:
-  DietTracker:
-    build:
-      targets:
-        DietTracker: all
-    run:
-      config: Debug
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.diettracker
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+        CODE_SIGNING_ALLOWED: NO
