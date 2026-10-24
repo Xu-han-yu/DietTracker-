@@ -168,7 +168,7 @@ struct OpenAICompatibleNutritionLLMService: NutritionLLMService {
         request.httpBody = payload
         request.timeoutInterval = 15
         // 不用任何本地缓存，也不收 Cookie —— 减少可追踪状态。
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCachePolicy
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.httpShouldHandleCookies = false
 
         // ephemeral：不落磁盘缓存；自定义 delegate：拦截非 HTTPS 重定向。
