@@ -40,7 +40,7 @@ final class ExerciseEntry {
 
     // MARK: 聚合（不持久化）
 
-    var totalKcal: Double { items.reduce(0) { $0 + $1.estimatedKcal } }
+    var totalKcal: Double { items.reduce(0) { $0 + $1.effectiveKcal } }
 
     var totalMinutes: Double { items.reduce(0) { $0 + $1.minutes } }
 
