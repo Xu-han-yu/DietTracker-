@@ -33,8 +33,12 @@ struct ExerciseInputSheet: View {
         EntryWriter(services: services, context: modelContext)
     }
 
+    /// ⚠️ 这里必须用 effective 口径（手动值优先），否则「合计」会和单行显示对不上。
     private var totalKcal: Double {
-        drafts.reduce(0) { $0 + writer.estimate(draft: $1, weightKg: weightKg).kcal }
+        drafts.reduce(0) { sum, draft in
+            let estimated = writer.estimate(draft: draft, weightKg: weightKg).kcal
+            return sum + (draft.manualKcal ?? estimated)
+        }
     }
 
     private var resolvedWeightText: String {
@@ -129,7 +133,7 @@ struct ExerciseInputSheet: View {
                     .font(Tokens.Typography.subhead)
                     .foregroundStyle(Tokens.Palette.textPrimary)
                 Spacer(minLength: Tokens.Space.xxs)
-                Text("\(AnalysisFormat.kcal(estimate.kcal)) kcal")
+                Text("\(AnalysisFormat.kcal(draft.manualKcal ?? estimate.kcal)) kcal")
                     .dtNumber(Tokens.Typography.Number.small)
             }
 
@@ -155,6 +159,9 @@ struct ExerciseInputSheet: View {
                 .font(Tokens.Typography.overline)
                 .monospacedDigit()
                 .foregroundStyle(Tokens.Palette.textTertiary)
+
+            ExerciseKcalEditor(manualKcal: $drafts[index].manualKcal,
+                               estimatedKcal: estimate.kcal)
 
             if let caution = estimate.cautionText {
                 Text(caution)
