@@ -287,12 +287,29 @@ struct DTStatusChip: View {
 }
 
 /// 仪表盘核心原语：标签 + 数值 + 单位。
+///
+/// ⚠️ 三列并排布局的三个硬要求（今日页与趋势页都是三列）：
+///
+///   1. **`.frame(maxWidth: .infinity)` 必须写在 `.dtSurfaceMuted()` 之后。**
+///      修饰符从内到外生效。若先 frame 再 padding，padding 会加在「无限宽」之外，
+///      每个格子都向 HStack 索要无穷宽度，HStack 无法均分 → 内容互相挤压 → 数字折行。
+///      这是 2.0 里「1,485 被折成 1,4 / 85」的真正根因，不是字号问题。
+///
+///   2. **数字必须带 `.lineLimit(1)` + `.minimumScaleFactor(0.5)`。**
+///      没有 lineLimit 时 SwiftUI 会从任意字符处断行，包括千分位逗号。
+///      加上后宽度不足会整体缩放，而不是断开。
+///
+///   3. **三列统一字号（Number.small 16pt），只用颜色区分重点。**
+///      只要有一列字号更大，它就会最先被挤压 —— 这正是折行的直接诱因。
+///      所以 emphasized 只改颜色，不改字号。
+///
+///   4. 单位用 `.fixedSize()` 锁住宽度，挤压时优先缩放数字，而不是把「kcal」砍掉。
 struct DTMetric: View {
     let label: String
     let value: Double
     let unit: String
     var status: NutrientStatus = .none
-    /// true 时使用强调色，用于「净摄入」这类需要突出的指标。
+    /// true 时使用强调色，用于「净摄入」「推荐」这类需要突出的指标。
     var emphasized: Bool = false
 
     var body: some View {
@@ -301,19 +318,24 @@ struct DTMetric: View {
                 .font(Tokens.Typography.overline)
                 .tracking(Tokens.Typography.overlineTracking)
                 .foregroundStyle(Tokens.Palette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
             HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.xxs) {
                 Text(Self.formatted(value))
-                    .dtNumber(
-                        emphasized ? Tokens.Typography.Number.medium : Tokens.Typography.Number.small,
-                        color: emphasized ? Tokens.Palette.accentText : Tokens.Palette.textPrimary
-                    )
+                    .dtNumber(Tokens.Typography.Number.small,
+                              color: emphasized ? Tokens.Palette.accentText : Tokens.Palette.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                 Text(unit)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.Palette.textTertiary)
+                    .fixedSize()
+                    .lineLimit(1)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .dtSurfaceMuted()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static func formatted(_ value: Double) -> String {
