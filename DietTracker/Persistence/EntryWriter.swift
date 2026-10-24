@@ -150,4 +150,6 @@ struct ExerciseDraft: Identifiable, Hashable {
     var minutes: Double
     var intensity: ExerciseIntensity
     var confidence: Double
+    /// 用户手动修正的 kcal。nil = 用 MET 估算值。落库后写进 ExerciseItem.manualKcal。
+    var manualKcal: Double? = nil
 }
