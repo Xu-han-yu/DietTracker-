@@ -29,16 +29,14 @@ enum NutritionSource: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .localTable:  return "本地表估算"
         case .externalAPI: return "在线数据估算"
-         case .fallback:    return "通用值估算"
+        case .fallback:    return "通用值估算"
         case .llm:         return "大模型估算"
         }
-
-
     }
 
     /// 是否需要额外提醒用户「这条可能不准」
-     var needsCaution: Bool { self == .fallback || self == .llm }
-
+    var needsCaution: Bool { self == .fallback || self == .llm }
+}
 
 @Model
 final class FoodItem {
