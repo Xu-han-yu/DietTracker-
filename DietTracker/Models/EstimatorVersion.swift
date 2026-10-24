@@ -12,6 +12,8 @@ import Foundation
 enum EstimatorVersion {
     /// 食物份量与营养估算（本地词典 + 规则）
     static let food = "food-local-v1"
+    /// 2.0：本地表未命中时的联网估算（模型输出随 Provider / 版本变化，必须标记来源）
+    static let foodLLM = "food-llm-v1"
     /// 运动消耗估算（MET 公式）
     static let exerciseMET = "exercise-met-v1"
     /// 推荐摄入量 RDI（Mifflin-St Jeor + 活动系数 + 目标调整）
