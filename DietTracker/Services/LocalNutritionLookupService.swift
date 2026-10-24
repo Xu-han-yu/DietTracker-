@@ -18,8 +18,18 @@ import Foundation
 struct LocalNutritionLookupService: NutritionLookupService {
 
     private let client = ExternalNutritionClient()
+    /// 2.0：联网兜底。默认实现会**每次调用现读配置**（开关 + 钥匙串 Key），
+    ///      所以用户在设置页改完立即生效，不需要重启 App。
+    private let llm: NutritionLLMService
+
+    init(llm: NutritionLLMService = OpenAICompatibleNutritionLLMService()) {
+        self.llm = llm
+    }
 
     var isExternalAPIEnabled: Bool { NutritionAPIConfig.isEnabled }
+
+    /// UI 用它决定显示「离线估算模式」还是「本地表 + 大模型兜底」。
+    var isRemoteEnabled: Bool { llm.isAvailable }
 
     func lookup(parsed: ParsedFood) async -> FoodNutrition {
         let grams = grams(for: parsed)
@@ -50,8 +60,52 @@ struct LocalNutritionLookupService: NutritionLookupService {
             )
         }
 
-        // 3) 兜底
+        // 3) 大模型兜底（2.0）。开关没开 / 没填 Key / 网络不通都会直接滑到 4)，
+        //    这里不用 !isAvailable 提前 return —— guard 会让未来的第 4 条链路被跳过。
+        if llm.isAvailable {
+            do {
+                let estimate = try await llm.estimate(name: parsed.name,
+                                                      quantityText: parsed.quantityText)
+                let scaled = Self.scaled(estimate, toKnownGrams: parsed.grams)
+                return FoodNutrition(
+                    name: parsed.name,
+                    matchedFoodID: nil,
+                    grams: scaled.grams,
+                    nutrition: scaled.nutrition,
+                    source: .llm,
+                    // 刻意压到 0.55 —— 低于 needsReview 的 0.6 阈值，UI 会自动提示核对。
+                    confidence: 0.55,
+                    estimatorVersion: EstimatorVersion.foodLLM
+                )
+            } catch {
+                // 任何失败都静默落到 4)。 LLMService 已经保证不抛未受控错误。
+            }
+        }
+
+        // 4) 兜底
         return fallback(parsed: parsed)
+    }
+
+    /// 把模型输出的「按 assumed_grams 算的一份」换算到目标克数。
+    ///
+    /// 用户说了「200g 牛肉」时按 200g 等比放大；没说克数时信任模型假设的份量。
+    /// - Note: 模型没给 assumed_grams 时按 100g 处理，避免除零。
+    private static func scaled(_ estimate: LLMNutritionEstimate,
+                               toKnownGrams known: Double?) -> (grams: Double, nutrition: Nutrition) {
+        let modelGrams = estimate.assumedGrams > 0 ? estimate.assumedGrams : 100
+        let target = (known ?? 0) > 0 ? known! : modelGrams
+        let ratio = target / modelGrams
+        return (
+            grams: target,
+            nutrition: Nutrition(kcal: estimate.kcal * ratio,
+                                 proteinG: estimate.proteinG * ratio,
+                                 fatG: estimate.fatG * ratio,
+                                 carbsG: estimate.carbsG * ratio,
+                                 calciumMG: estimate.calciumMG * ratio,
+                                 ironMG: estimate.ironMG * ratio,
+                                 vitaminCMG: estimate.vitaminCMG * ratio,
+                                 fiberG: estimate.fiberG * ratio)
+        )
     }
 
     func fallback(parsed: ParsedFood) -> FoodNutrition {
