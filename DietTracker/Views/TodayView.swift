@@ -33,6 +33,8 @@ struct TodayView: View {
     @State private var showingMealInput = false
     @State private var showingExerciseInput = false
     @State private var inputSlotID: String? = nil
+    /// 正在编辑的运动条目（今日/历史都能改手动 kcal）
+    @State private var editingExerciseItem: ExerciseItem? = nil
 
     // MARK: 派生数据
 
@@ -119,6 +121,11 @@ struct TodayView: View {
             .sheet(isPresented: $showingExerciseInput) {
                 ExerciseInputSheet(dayIdentifier: dayID,
                                    weightKg: profile.effectiveWeightKg) { runAnalysis() }
+            }
+            // 保存之后也能回来改 kcal —— MET 是群体均值，真值往往要事后才校准。
+            .sheet(item: $editingExerciseItem) { item in
+                ExerciseItemEditSheet(item: item)
+                    .onDisappear(perform: runAnalysis)
             }
             .onAppear(perform: runAnalysis)
         }
@@ -231,16 +238,26 @@ struct TodayView: View {
                     .dtNumber(Tokens.Typography.Number.small)
             }
             ForEach(entry.items) { item in
-                HStack(spacing: Tokens.Space.xs) {
-                    Text("\(item.name) · \(item.minutesText) · \(item.intensity.shortName)")
-                        .font(Tokens.Typography.caption)
-                        .foregroundStyle(Tokens.Palette.textSecondary)
-                    Spacer(minLength: Tokens.Space.xxs)
-                    Text("MET \(String(format: "%.1f", item.metValue))")
-                        .font(Tokens.Typography.overline)
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.Palette.textTertiary)
+                Button {
+                    editingExerciseItem = item
+                } label: {
+                    HStack(spacing: Tokens.Space.xs) {
+                        Text("\(item.name) · \(item.minutesText) · \(item.intensity.shortName)")
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.Palette.textSecondary)
+                        Spacer(minLength: Tokens.Space.xxs)
+                        if item.isManuallyAdjusted {
+                            Text("已修正")
+                                .font(Tokens.Typography.overline)
+                                .foregroundStyle(Tokens.Palette.accentText)
+                        }
+                        Text("\(AnalysisFormat.kcal(item.effectiveKcal)) kcal · MET \(String(format: "%.1f", item.metValue))")
+                            .font(Tokens.Typography.overline)
+                            .monospacedDigit()
+                            .foregroundStyle(Tokens.Palette.textTertiary)
+                    }
                 }
+                .buttonStyle(.plain)
             }
             if entry.needsReview {
                 Text("有条目没匹配到具体运动，按中等强度一般运动估算")
