@@ -65,7 +65,12 @@ struct ExerciseEntryData: Identifiable, Hashable, Sendable {
 
 enum ExerciseDatabase {
 
-    static let all: [ExerciseEntryData] = [
+       /// `core` 是原表；`dailySupplement`（2.0 日常活动扩充）定义在 ExerciseDatabaseSupplement.swift。
+    /// 拆成两个静态属性是为了避免往这个数组字面量里继续堆 — 大了会明显拖慢类型检查。
+    static let all: [ExerciseEntryData] = core + dailySupplement
+
+    static let core: [ExerciseEntryData] = [
+
 
         // ---------------- 有氧 ----------------
         ExerciseEntryData(id: "running", name: "跑步",
