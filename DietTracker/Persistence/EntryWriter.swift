@@ -99,7 +99,6 @@ struct EntryWriter {
                                       weightKgAtEstimate: estimate.weightKgAtEstimate,
                                       manualKcal: draft.manualKcal,
                                       isFallback: estimate.isFallback,
-
                                       confidence: estimate.confidence,
                                       sortOrder: index))
         }
@@ -153,7 +152,6 @@ struct ExerciseDraft: Identifiable, Hashable {
     /// 用户手动修正的 kcal。nil = 用 MET 估算值。落库后写进 ExerciseItem.manualKcal。
     var manualKcal: Double? = nil
 }
-
 // MARK: - 运动条目修正
 
 extension EntryWriter {
