@@ -13,6 +13,11 @@
 //
 //  所有配色 / 字号 / 间距一律走 Tokens 与 dtXxx 修饰符，本文件不出现任何字面量。
 //
+//  布局约束：
+//   - 三列指标卡（摄入 / 运动 / 推荐）的等分与数字单行，由 Theme.swift 的 DTMetric
+//     统一负责（趋势页共用），本文件不重复实现。
+//   - 滚动内容底部额外留白，避免最后一张卡片被 TabBar 遮挡。
+//
 
 import SwiftUI
 import SwiftData
@@ -98,7 +103,10 @@ struct TodayView: View {
                     waterCard
                 }
                 .dtScreenPadding()
-                .padding(.vertical, Tokens.Space.md)
+                .padding(.top, Tokens.Space.md)
+                // 底部留足余量：TabBar 之上再垫一层，滚到底时最后一张卡片的
+                // 免责声明不会被 TabBar 压住。
+                .padding(.bottom, Tokens.Space.xxl)
             }
             .dtScreenBackground()
             .navigationTitle(DayIdentifier.displayText(dayID))
