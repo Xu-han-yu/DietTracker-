@@ -153,3 +153,20 @@ struct ExerciseDraft: Identifiable, Hashable {
     /// 用户手动修正的 kcal。nil = 用 MET 估算值。落库后写进 ExerciseItem.manualKcal。
     var manualKcal: Double? = nil
 }
+
+// MARK: - 运动条目修正
+
+extension EntryWriter {
+
+    /// 给已保存的条目写入手动消耗值。传 nil 表示「恢复估算值」。
+    @discardableResult
+    func setManualKcal(_ kcal: Double?, for item: ExerciseItem) -> Bool {
+        item.manualKcal = kcal
+        do {
+            try context.save()
+            return true
+        } catch {
+            return false
+        }
+    }
+}
