@@ -169,6 +169,9 @@ struct MealInputSheet: View {
         if let q = item.quantityText, !q.isEmpty { parts.append(q) }
         if let g = item.grams, g > 0 { parts.append("约 \(AnalysisFormat.kcal(g)) g") }
         if parts.isEmpty { parts.append("按默认份量估算") }
+        // 2.0：模糊匹配给出的候选置信度被压在 0.72 以下，必须让用户看出这是「猜的」。
+        // 这是「不伪造命中」承诺的兜偿 —— 猜得出名字可以，但用户得知道。
+        if item.confidence < 0.75 { parts.append("模糊匹配，请核对") }
         return parts.joined(separator: " · ")
     }
 
