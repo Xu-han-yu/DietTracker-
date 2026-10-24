@@ -1,210 +1,135 @@
 //
-//  LocalNutritionLookupService.swift
+//  ExerciseItemEditSheet.swift
 //  DietTracker
 //
-//  营养查询：本地表为主，外部 API 为可选增强，失败静默兜底。
+//  编辑**已保存**的一条运动：名称 / 时长 / 强度 / 消耗（可手动修正）。
 //
-//  优先级：
-//    1. 命中本地食物表 → 用本地值（离线、可复现，优先于 API）
-//    2. 没命中且 API 已配置 → 试一次外部查询
-//    3. 还没结果 → 通用兜底值，source = .fallback，confidence 0.3
+//  ⚠️ 保留估算快照：这里改的是 manualKcal，不动 estimatedKcal / metValue / weightKgAtEstimate。
+//     也就是说「当时 MET 算出来多少」这条证据永久留着，复核时能对得上。
+//     用户的修正值优先级更高（见 ExerciseItem.effectiveKcal），但不会销毁原估算。
 //
-//  ⚠️ 本机不抛错。任何失败都在内部消化，调用方一定拿得到 FoodNutrition。
-//    这就是为什么 `lookup` 的返回类型不是 Optional 也不 throws。
+//  ⚠️ 时长改了**不重新估算**：用户手动填了 kcal 之后，再改时长系统不会覆盖他的数字。
+//     这是刻意的 —— 让用户掌握最终解释权。
 //
 
-import Foundation
+import SwiftUI
+import SwiftData
 
-struct LocalNutritionLookupService: NutritionLookupService {
+struct ExerciseItemEditSheet: View {
 
-    private let client = ExternalNutritionClient()
-    /// 2.0：联网兜底。默认实现会**每次调用现读配置**（开关 + 钥匙串 Key），
-    ///      所以用户在设置页改完立即生效，不需要重启 App。
-    private let llm: NutritionLLMService
+    @Bindable var item: ExerciseItem
 
-    init(llm: NutritionLLMService = OpenAICompatibleNutritionLLMService()) {
-        self.llm = llm
-    }
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
-    var isExternalAPIEnabled: Bool { NutritionAPIConfig.isEnabled }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Tokens.Space.md) {
+                    nameField
 
-    /// UI 用它决定显示「离线估算模式」还是「本地表 + 大模型兜底」。
-    var isRemoteEnabled: Bool { llm.isAvailable }
+                    VStack(alignment: .leading, spacing: Tokens.Space.xs) {
+                        Stepper(value: $item.minutes,
+                                in: 0...ExerciseFallback.maxMinutes,
+                                step: 5) {
+                            Text("时长 \(Int(item.minutes.rounded())) 分钟")
+                                .font(Tokens.Typography.body)
+                                .monospacedDigit()
+                        }
+                        .dtMaxDynamicType()
 
-    func lookup(parsed: ParsedFood) async -> FoodNutrition {
-        let grams = grams(for: parsed)
+                        Text("时长只影响记录，不会重算已修正的消耗值。")
+                            .font(Tokens.Typography.overline)
+                            .foregroundStyle(Tokens.Palette.textTertiary)
+                    }
 
-        // 1) 本地表
-        if let id = parsed.matchedFoodID, let entry = FoodDatabase.entry(id: id) {
-            return FoodNutrition(
-                name: entry.name,
-                matchedFoodID: id,
-                grams: grams,
-                nutrition: entry.per100g.scaled(by: grams / 100.0),
-                source: .localTable,
-                confidence: parsed.confidence,
-                estimatorVersion: EstimatorVersion.food
-            )
-        }
+                    VStack(alignment: .leading, spacing: Tokens.Space.xs) {
+                        Text("强度")
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.Palette.textSecondary)
+                        Picker("强度", selection: $item.intensity) {
+                            ForEach(ExerciseIntensity.allCases) { level in
+                                Text(level.displayName).tag(level)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
 
-        // 2) 外部 API（未配置 Key 时这一步不会执行）
-        if NutritionAPIConfig.isEnabled, let remote = await client.fetch(name: parsed.name) {
-            return FoodNutrition(
-                name: parsed.name,
-                matchedFoodID: nil,
-                grams: grams,
-                nutrition: remote.scaled(by: grams / 100.0),
-                source: .externalAPI,
-                confidence: 0.70,
-                estimatorVersion: EstimatorVersion.food
-            )
-        }
+                    kcalCard
 
-        // 3) 大模型兜底（2.0）。开关没开 / 没填 Key / 网络不通都会直接滑到 4)，
-        //    这里不用 !isAvailable 提前 return —— guard 会让未来的第 4 条链路被跳过。
-        if llm.isAvailable {
-            do {
-                let estimate = try await llm.estimate(name: parsed.name,
-                                                      quantityText: parsed.quantityText)
-                let scaled = Self.scaled(estimate, toKnownGrams: parsed.grams)
-                return FoodNutrition(
-                    name: parsed.name,
-                    matchedFoodID: nil,
-                    grams: scaled.grams,
-                    nutrition: scaled.nutrition,
-                    source: .llm,
-                    // 刻意压到 0.55 —— 低于 needsReview 的 0.6 阈值，UI 会自动提示核对。
-                    confidence: 0.55,
-                    estimatorVersion: EstimatorVersion.foodLLM
-                )
-            } catch {
-                // 任何失败都静默落到 4)。 LLMService 已经保证不抛未受控错误。
+                    DTDisclaimer()
+                }
+                .dtScreenPadding()
+                .padding(.vertical, Tokens.Space.md)
+            }
+            .dtScreenBackground()
+            .navigationTitle("修改运动记录")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        try? modelContext.save()
+                        dismiss()
+                    }
+                }
             }
         }
-
-        // 4) 兜底
-        return fallback(parsed: parsed)
     }
 
-    /// 把模型输出的「按 assumed_grams 算的一份」换算到目标克数。
-    ///
-    /// 用户说了「200g 牛肉」时按 200g 等比放大；没说克数时信任模型假设的份量。
-    /// - Note: 模型没给 assumed_grams 时按 100g 处理，避免除零。
-    private static func scaled(_ estimate: LLMNutritionEstimate,
-                               toKnownGrams known: Double?) -> (grams: Double, nutrition: Nutrition) {
-        let modelGrams = estimate.assumedGrams > 0 ? estimate.assumedGrams : 100
-        let target = (known ?? 0) > 0 ? known! : modelGrams
-        let ratio = target / modelGrams
-        return (
-            grams: target,
-            nutrition: Nutrition(kcal: estimate.kcal * ratio,
-                                 proteinG: estimate.proteinG * ratio,
-                                 fatG: estimate.fatG * ratio,
-                                 carbsG: estimate.carbsG * ratio,
-                                 calciumMG: estimate.calciumMG * ratio,
-                                 ironMG: estimate.ironMG * ratio,
-                                 vitaminCMG: estimate.vitaminCMG * ratio,
-                                 fiberG: estimate.fiberG * ratio)
-        )
-    }
+    // MARK: 子视图
 
-    func fallback(parsed: ParsedFood) -> FoodNutrition {
-        let grams = grams(for: parsed)
-        return FoodNutrition(
-            name: parsed.name.isEmpty ? "未识别食物" : parsed.name,
-            matchedFoodID: nil,
-            grams: grams,
-            nutrition: FoodDatabase.unknownPer100g.scaled(by: grams / 100.0),
-            source: .fallback,
-            confidence: 0.30,
-            estimatorVersion: EstimatorVersion.food
-        )
-    }
-
-    private func grams(for parsed: ParsedFood) -> Double {
-        let g = parsed.grams ?? FoodDatabase.unknownDefaultGrams
-        return min(max(g, 0), 5000)   // 限幅，防误输入产生离谱数值
-    }
-}
-
-// MARK: - 外部 API 占位实现
-
-/// 外部营养 API 客户端。
-///
-/// ⚠️ 这是一个**占位实现**：Info.plist 里的 `NUTRITION_API_BASE_URL` / `NUTRITION_API_KEY`
-///    默认留空，因此 `isEnabled == false`，本客户端**永远不会发起请求**。
-///
-/// 接入真实服务时需要改两处：
-///   1. `requestURL(name:)` 适配该服务的路径与参数
-///   2. `ExternalNutritionResponse` 适配该服务返回的字段
-/// 其余「失败即静默回退」的逻辑不用动。
-struct ExternalNutritionClient: Sendable {
-
-    /// 查询失败返回 nil，调用方会自行回退到兜底值。**不抛错。**
-    func fetch(name: String) async -> Nutrition? {
-        guard NutritionAPIConfig.isEnabled else { return nil }
-        guard let url = requestURL(name: name) else { return nil }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 8
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else { return nil }
-            let decoded = try JSONDecoder().decode(ExternalNutritionResponse.self, from: data)
-            return decoded.firstNutrition
-        } catch {
-            // 网络失败 / 格式不符 / 超时：一律静默回退
-            return nil
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.xs) {
+            Text("名称")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.textSecondary)
+            TextField("运动名称", text: $item.name)
+                .font(Tokens.Typography.body)
+                .padding(Tokens.Space.sm)
+                .background(Tokens.Palette.surfaceMuted)
+                .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
+                .dtMaxDynamicType()
         }
     }
 
-    /// baseURL 需要是完整 URL（含 scheme 与 path），例如 `https://api.example.com/v1/food`。
-    private func requestURL(name: String) -> URL? {
-        guard var components = URLComponents(string: NutritionAPIConfig.baseURL) else { return nil }
-        var items = components.queryItems ?? []
-        items.append(URLQueryItem(name: "name", value: name))
-        items.append(URLQueryItem(name: "apiKey", value: NutritionAPIConfig.apiKey))
-        components.queryItems = items
-        return components.url
+    private var kcalCard: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.sm) {
+            DTSectionHeader(title: "消耗估算",
+                            subtitle: "MET \(String(format: "%.1f", item.metValue)) × \(AnalysisFormat.kcal(item.weightKgAtEstimate)) kg",
+                            trailing: item.isFallback ? "兜底估算" : nil)
+
+            ExerciseKcalEditor(manualKcal: $item.manualKcal,
+                               estimatedKcal: item.estimatedKcal)
+
+            DTDivider()
+
+            Text("估算公式给出的是群体平均值，个体差异很大。如果你有更准的来源（运动手环、跑步机读数），直接改这里的值。")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.textTertiary)
+        }
+        .dtCard()
     }
 }
 
-/// 外部服务返回结构的**占位模型**。字段按通用营养 API 的常见命名定义，
-/// 接入真实服务时按对方文档调整即可。
-struct ExternalNutritionResponse: Decodable {
+#Preview("编辑运动条目") {
+    ExerciseItemEditPreviewHost()
+        .dtTheme(.default)
+}
 
-    struct Item: Decodable {
-        let name: String?
-        let calories: Double?
-        let protein_g: Double?
-        let fat_g: Double?
-        let carbohydrates_g: Double?
-        let calcium_mg: Double?
-        let iron_mg: Double?
-        let vitamin_c_mg: Double?
-        let fiber_g: Double?
+@MainActor
+private struct ExerciseItemEditPreviewHost: View {
+    private let context = try! SeedData.makePreviewContext()
 
-        var nutrition: Nutrition {
-            Nutrition(kcal: calories ?? 0,
-                      proteinG: protein_g ?? 0,
-                      fatG: fat_g ?? 0,
-                      carbsG: carbohydrates_g ?? 0,
-                      calciumMG: calcium_mg ?? 0,
-                      ironMG: iron_mg ?? 0,
-                      vitaminCMG: vitamin_c_mg ?? 0,
-                      fiberG: fiber_g ?? 0)
-        }
-    }
-
-    /// 有的服务返回数组，有的返回对象；两种都兼容。
-    let items: [Item]?
-    let item: Item?
-
-    var firstNutrition: Nutrition? {
-        if let item { return item.nutrition }
-        return items?.first?.nutrition
+    var body: some View {
+        let item = ExerciseItem(name: "跑步",
+                                matchedExerciseID: "running",
+                                minutes: 30,
+                                intensity: .moderate,
+                                metValue: 11.0,
+                                estimatedKcal: 385,
+                                weightKgAtEstimate: 70)
+        ExerciseItemEditSheet(item: item)
+            .modelContext(context)
     }
 }
