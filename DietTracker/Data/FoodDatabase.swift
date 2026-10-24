@@ -643,8 +643,12 @@ enum FoodDatabase {
     ]
 
     /// 全表。往这里加分类即可，索引与搜索会自动覆盖。
+       // 2.0 扩充：中式菜品 A / B + 零食 + 现制饮品，数据见 FoodDatabaseSupplement.swift
     static let all: [FoodEntry] = staples + proteins + vegetables + fruits
                                  + dairy + drinks + fats + dishes
+                                 + supplementDishesA + supplementDishesB
+                                 + supplementSnacks + supplementDrinks
+
 
     // MARK: 索引
 
