@@ -43,6 +43,7 @@ struct SettingsView: View {
                     .listRowBackground(Tokens.Palette.surface)
                 }
 
+                LLMSettingsSection()
                 slotSection
                 dataSection
                 aboutSection
@@ -146,10 +147,10 @@ struct SettingsView: View {
             .listRowBackground(Tokens.Palette.surface)
 
             HStack {
-                Text("在线营养数据")
+                Text("估算模式")
                     .font(Tokens.Typography.body)
                 Spacer(minLength: Tokens.Space.xs)
-                Text(NutritionAPIConfig.isEnabled ? "已启用（可选增强）" : "未配置，纯本地运行")
+                Text(modeText)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.Palette.textTertiary)
             }
@@ -162,13 +163,19 @@ struct SettingsView: View {
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.Palette.textSecondary)
         } footer: {
-            Text("所有数字都来自本地食物表与 MET 表的估算，不接入 HealthKit / Apple Watch，也不做联网请求（除非你配置了在线营养数据）。")
+            Text("所有数字都来自本地食物表与 MET 表的估算，不接入 HealthKit / Apple Watch。\(remoteEnabled ? "本地表未命中时，会用你配置的大模型估算一次（只发送食物名称与份量）。" : "当前未启用联网分析，全程离线估算。")")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.Palette.textTertiary)
         }
     }
 
     // MARK: 动作
+
+    private var remoteEnabled: Bool { OpenAICompatibleNutritionLLMService().isAvailable }
+
+    private var modeText: String {
+        remoteEnabled ? "本地表 + 大模型兜底" : "离线估算模式"
+    }
 
     private var appVersion: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
@@ -523,6 +530,8 @@ private struct ExportExerciseItem: Codable {
     var intensity: String
     var metValue: Double
     var estimatedKcal: Double
+    /// 用户手动修正的消耗值；未修正是 null
+    var manualKcal: Double?
     var weightKgAtEstimate: Double
     var isFallback: Bool
 
@@ -532,6 +541,7 @@ private struct ExportExerciseItem: Codable {
         intensity = item.intensity.rawValue
         metValue = item.metValue
         estimatedKcal = item.estimatedKcal
+        manualKcal = item.manualKcal
         weightKgAtEstimate = item.weightKgAtEstimate
         isFallback = item.isFallback
     }
