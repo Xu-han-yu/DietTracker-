@@ -20,6 +20,8 @@ enum NutritionSource: String, Codable, CaseIterable, Identifiable, Sendable {
     case externalAPI
     /// 词典兜底：没匹配到具体食物，用了通用估算值
     case fallback
+    /// 2.0：本地表没命中时由大模型估算（用户自行配置，默认关闭）
+    case llm
 
     var id: String { rawValue }
 
@@ -27,13 +29,16 @@ enum NutritionSource: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .localTable:  return "本地表估算"
         case .externalAPI: return "在线数据估算"
-        case .fallback:    return "通用值估算"
+         case .fallback:    return "通用值估算"
+        case .llm:         return "大模型估算"
         }
+
+
     }
 
     /// 是否需要额外提醒用户「这条可能不准」
-    var needsCaution: Bool { self == .fallback }
-}
+     var needsCaution: Bool { self == .fallback || self == .llm }
+
 
 @Model
 final class FoodItem {
