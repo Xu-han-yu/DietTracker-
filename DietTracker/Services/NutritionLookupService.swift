@@ -48,6 +48,10 @@ protocol NutritionLookupService {
 
     /// 外部 API 是否已启用（Key 与 BaseURL 都非空）。
     var isExternalAPIEnabled: Bool { get }
+
+    /// 2.0：联网的大模型兜底是否可用（开关打开 + 已填 Key + 地址是 https）。
+    /// UI 用它显示「当前处于离线估算模式」还是「本地表 + 大模型兜底」。
+    var isRemoteEnabled: Bool { get }
 }
 
 // MARK: - 配置读取
