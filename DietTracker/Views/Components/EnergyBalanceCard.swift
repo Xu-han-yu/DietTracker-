@@ -7,6 +7,9 @@
 //  ⚠️ 净摄入是**描述性指标**，不是判定指标。
 //     判定主线恒为「摄入 vs RDI」，运动消耗只出现在这里，永远不回加进 RDI。
 //
+//  布局职责划分：三张小指标卡（摄入 / 运动 / 推荐）的等分与单行由 Theme.swift 的
+//  DTMetric 统一负责（趋势页共用同一组件）。本文件只负责 hero 数字自身不折行。
+//
 
 import SwiftUI
 
@@ -26,9 +29,13 @@ struct EnergyBalanceCard: View {
             HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.xs) {
                 Text(AnalysisFormat.kcal(balance.netKcal))
                     .dtNumber(Tokens.Typography.Number.hero)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text("kcal")
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.Palette.textTertiary)
+                    .fixedSize()
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
 
