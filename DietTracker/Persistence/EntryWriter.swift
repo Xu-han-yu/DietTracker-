@@ -97,7 +97,9 @@ struct EntryWriter {
                                       metValue: estimate.metValue,
                                       estimatedKcal: estimate.kcal,
                                       weightKgAtEstimate: estimate.weightKgAtEstimate,
+                                      manualKcal: draft.manualKcal,
                                       isFallback: estimate.isFallback,
+
                                       confidence: estimate.confidence,
                                       sortOrder: index))
         }
