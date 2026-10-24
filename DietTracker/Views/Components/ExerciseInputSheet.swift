@@ -1,215 +1,210 @@
 //
-//  ExerciseInputSheet.swift
+//  LocalNutritionLookupService.swift
 //  DietTracker
 //
-//  运动输入卡片：自然语言 → 解析预览（时长 / 强度可改）→ 保存。
+//  营养查询：本地表为主，外部 API 为可选增强，失败静默兜底。
 //
-//  ⚠️ 强度默认中等，用户可手动改低 / 中 / 高。
-//     没匹配到具体运动时会用「中等强度一般运动」MET 兜底，
-//     预览里必须明确标注，不能让用户以为是一个准确数字。
+//  优先级：
+//    1. 命中本地食物表 → 用本地值（离线、可复现，优先于 API）
+//    2. 没命中且 API 已配置 → 试一次外部查询
+//    3. 还没结果 → 通用兜底值，source = .fallback，confidence 0.3
+//
+//  ⚠️ 本机不抛错。任何失败都在内部消化，调用方一定拿得到 FoodNutrition。
+//    这就是为什么 `lookup` 的返回类型不是 Optional 也不 throws。
 //
 
-import SwiftUI
-import SwiftData
+import Foundation
 
-struct ExerciseInputSheet: View {
+struct LocalNutritionLookupService: NutritionLookupService {
 
-    var dayIdentifier: String
-    /// 估算用的体重。传 0 或未设置时用 ExerciseFallback.defaultWeightKg 兜底。
-    var weightKg: Double
-    var onSaved: (() -> Void)? = nil
+    private let client = ExternalNutritionClient()
+    /// 2.0：联网兜底。默认实现会**每次调用现读配置**（开关 + 钥匙串 Key），
+    ///      所以用户在设置页改完立即生效，不需要重启 App。
+    private let llm: NutritionLLMService
 
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @Environment(\.appServices) private var services
-
-    @State private var rawText: String = ""
-    @State private var drafts: [ExerciseDraft] = []
-    @State private var hasParsed: Bool = false
-    @State private var isSaving: Bool = false
-    @State private var notice: String?
-
-    private var writer: EntryWriter {
-        EntryWriter(services: services, context: modelContext)
+    init(llm: NutritionLLMService = OpenAICompatibleNutritionLLMService()) {
+        self.llm = llm
     }
 
-    /// ⚠️ 这里必须用 effective 口径（手动值优先），否则「合计」会和单行显示对不上。
-    private var totalKcal: Double {
-        drafts.reduce(0) { sum, draft in
-            let estimated = writer.estimate(draft: draft, weightKg: weightKg).kcal
-            return sum + (draft.manualKcal ?? estimated)
+    var isExternalAPIEnabled: Bool { NutritionAPIConfig.isEnabled }
+
+    /// UI 用它决定显示「离线估算模式」还是「本地表 + 大模型兜底」。
+    var isRemoteEnabled: Bool { llm.isAvailable }
+
+    func lookup(parsed: ParsedFood) async -> FoodNutrition {
+        let grams = grams(for: parsed)
+
+        // 1) 本地表
+        if let id = parsed.matchedFoodID, let entry = FoodDatabase.entry(id: id) {
+            return FoodNutrition(
+                name: entry.name,
+                matchedFoodID: id,
+                grams: grams,
+                nutrition: entry.per100g.scaled(by: grams / 100.0),
+                source: .localTable,
+                confidence: parsed.confidence,
+                estimatorVersion: EstimatorVersion.food
+            )
         }
-    }
 
-    private var resolvedWeightText: String {
-        weightKg > 0
-            ? "按体重 \(AnalysisFormat.kcal(weightKg)) kg 估算"
-            : "未设置体重，按 \(AnalysisFormat.kcal(ExerciseFallback.defaultWeightKg)) kg 估算"
-    }
+        // 2) 外部 API（未配置 Key 时这一步不会执行）
+        if NutritionAPIConfig.isEnabled, let remote = await client.fetch(name: parsed.name) {
+            return FoodNutrition(
+                name: parsed.name,
+                matchedFoodID: nil,
+                grams: grams,
+                nutrition: remote.scaled(by: grams / 100.0),
+                source: .externalAPI,
+                confidence: 0.70,
+                estimatorVersion: EstimatorVersion.food
+            )
+        }
 
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Tokens.Space.md) {
-                    inputEditor
-                    if hasParsed { previewSection }
-                    if let notice {
-                        Text(notice)
-                            .font(Tokens.Typography.caption)
-                            .foregroundStyle(Tokens.Palette.textSecondary)
-                    }
-                    DTDisclaimer()
-                }
-                .dtScreenPadding()
-                .padding(.vertical, Tokens.Space.md)
-            }
-            .dtScreenBackground()
-            .navigationTitle("记一笔运动")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        save()
-                    } label: {
-                        Text(isSaving ? "保存中…" : "保存")
-                    }
-                    .disabled(drafts.isEmpty || isSaving)
-                }
+        // 3) 大模型兜底（2.0）。开关没开 / 没填 Key / 网络不通都会直接滑到 4)，
+        //    这里不用 !isAvailable 提前 return —— guard 会让未来的第 4 条链路被跳过。
+        if llm.isAvailable {
+            do {
+                let estimate = try await llm.estimate(name: parsed.name,
+                                                      quantityText: parsed.quantityText)
+                let scaled = Self.scaled(estimate, toKnownGrams: parsed.grams)
+                return FoodNutrition(
+                    name: parsed.name,
+                    matchedFoodID: nil,
+                    grams: scaled.grams,
+                    nutrition: scaled.nutrition,
+                    source: .llm,
+                    // 刻意压到 0.55 —— 低于 needsReview 的 0.6 阈值，UI 会自动提示核对。
+                    confidence: 0.55,
+                    estimatorVersion: EstimatorVersion.foodLLM
+                )
+            } catch {
+                // 任何失败都静默落到 4)。 LLMService 已经保证不抛未受控错误。
             }
         }
+
+        // 4) 兜底
+        return fallback(parsed: parsed)
     }
 
-    // MARK: 子视图
-
-    private var inputEditor: some View {
-        VStack(alignment: .leading, spacing: Tokens.Space.xs) {
-            TextField("例如：跑步 30 分钟、力量训练 40 分钟", text: $rawText, axis: .vertical)
-                .lineLimit(2...5)
-                .font(Tokens.Typography.body)
-                .foregroundStyle(Tokens.Palette.textPrimary)
-                .padding(Tokens.Space.sm)
-                .background(Tokens.Palette.surfaceMuted)
-                .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.md, style: .continuous))
-                .dtMaxDynamicType()
-
-            Button { runParse() } label: { Text("解析") }
-                .dtSecondaryButton()
-                .disabled(rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
+    /// 把模型输出的「按 assumed_grams 算的一份」换算到目标克数。
+    ///
+    /// 用户说了「200g 牛肉」时按 200g 等比放大；没说克数时信任模型假设的份量。
+    /// - Note: 模型没给 assumed_grams 时按 100g 处理，避免除零。
+    private static func scaled(_ estimate: LLMNutritionEstimate,
+                               toKnownGrams known: Double?) -> (grams: Double, nutrition: Nutrition) {
+        let modelGrams = estimate.assumedGrams > 0 ? estimate.assumedGrams : 100
+        let target = (known ?? 0) > 0 ? known! : modelGrams
+        let ratio = target / modelGrams
+        return (
+            grams: target,
+            nutrition: Nutrition(kcal: estimate.kcal * ratio,
+                                 proteinG: estimate.proteinG * ratio,
+                                 fatG: estimate.fatG * ratio,
+                                 carbsG: estimate.carbsG * ratio,
+                                 calciumMG: estimate.calciumMG * ratio,
+                                 ironMG: estimate.ironMG * ratio,
+                                 vitaminCMG: estimate.vitaminCMG * ratio,
+                                 fiberG: estimate.fiberG * ratio)
+        )
     }
 
-    private var previewSection: some View {
-        VStack(alignment: .leading, spacing: Tokens.Space.sm) {
-            DTSectionHeader(title: "识别结果",
-                            subtitle: resolvedWeightText,
-                            trailing: "合计 \(AnalysisFormat.kcal(totalKcal)) kcal")
-
-            if drafts.isEmpty {
-                Text("没能识别出运动。试试写成「跑步 30 分钟」这样的形式，或者直接写运动名再手动填时长。")
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.Palette.textSecondary)
-            } else {
-                ForEach(drafts.indices, id: \.self) { index in
-                    draftRow(index: index, draft: drafts[index])
-                    if index < drafts.count - 1 { DTDivider() }
-                }
-            }
-
-            Text("消耗 = MET × 体重 kg × 小时数。这是按群体平均值推算的估算值，个体差异很大。")
-                .font(Tokens.Typography.caption)
-                .foregroundStyle(Tokens.Palette.textTertiary)
-        }
-        .dtCard()
+    func fallback(parsed: ParsedFood) -> FoodNutrition {
+        let grams = grams(for: parsed)
+        return FoodNutrition(
+            name: parsed.name.isEmpty ? "未识别食物" : parsed.name,
+            matchedFoodID: nil,
+            grams: grams,
+            nutrition: FoodDatabase.unknownPer100g.scaled(by: grams / 100.0),
+            source: .fallback,
+            confidence: 0.30,
+            estimatorVersion: EstimatorVersion.food
+        )
     }
 
-    private func draftRow(index: Int, draft: ExerciseDraft) -> some View {
-        let estimate = writer.estimate(draft: draft, weightKg: weightKg)
-        return VStack(alignment: .leading, spacing: Tokens.Space.xs) {
-            HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.xs) {
-                Text(draft.name)
-                    .font(Tokens.Typography.subhead)
-                    .foregroundStyle(Tokens.Palette.textPrimary)
-                Spacer(minLength: Tokens.Space.xxs)
-                Text("\(AnalysisFormat.kcal(draft.manualKcal ?? estimate.kcal)) kcal")
-                    .dtNumber(Tokens.Typography.Number.small)
-            }
-
-            Stepper(value: $drafts[index].minutes,
-                    in: 0...ExerciseFallback.maxMinutes,
-                    step: 5) {
-                Text("时长 \(Int(drafts[index].minutes.rounded())) 分钟")
-                    .font(Tokens.Typography.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(Tokens.Palette.textSecondary)
-            }
-            .dtMaxDynamicType()
-
-            Picker("强度", selection: $drafts[index].intensity) {
-                ForEach(ExerciseIntensity.allCases) { level in
-                    Text(level.displayName).tag(level)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
-            Text("\(estimate.formulaText) ≈ \(AnalysisFormat.kcal(estimate.kcal)) kcal")
-                .font(Tokens.Typography.overline)
-                .monospacedDigit()
-                .foregroundStyle(Tokens.Palette.textTertiary)
-
-            ExerciseKcalEditor(manualKcal: $drafts[index].manualKcal,
-                               estimatedKcal: estimate.kcal)
-
-            if let caution = estimate.cautionText {
-                Text(caution)
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.Palette.textSecondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: 动作
-
-    private func runParse() {
-        drafts = writer.previewExercises(rawText: rawText)
-        hasParsed = true
-        notice = nil
-    }
-
-    @MainActor
-    private func save() {
-        isSaving = true
-        defer { isSaving = false }
-
-        let entry = writer.saveExercise(dayIdentifier: dayIdentifier,
-                                        rawText: rawText,
-                                        weightKg: weightKg,
-                                        drafts: drafts)
-        if entry == nil {
-            notice = "没有可保存的内容，先点「解析」看看识别结果。"
-            return
-        }
-        onSaved?()
-        dismiss()
+    private func grams(for parsed: ParsedFood) -> Double {
+        let g = parsed.grams ?? FoodDatabase.unknownDefaultGrams
+        return min(max(g, 0), 5000)   // 限幅，防误输入产生离谱数值
     }
 }
 
-#Preview("运动输入") {
-    ExerciseInputPreviewHost()
-        .dtTheme(.default)
+// MARK: - 外部 API 占位实现
+
+/// 外部营养 API 客户端。
+///
+/// ⚠️ 这是一个**占位实现**：Info.plist 里的 `NUTRITION_API_BASE_URL` / `NUTRITION_API_KEY`
+///    默认留空，因此 `isEnabled == false`，本客户端**永远不会发起请求**。
+///
+/// 接入真实服务时需要改两处：
+///   1. `requestURL(name:)` 适配该服务的路径与参数
+///   2. `ExternalNutritionResponse` 适配该服务返回的字段
+/// 其余「失败即静默回退」的逻辑不用动。
+struct ExternalNutritionClient: Sendable {
+
+    /// 查询失败返回 nil，调用方会自行回退到兜底值。**不抛错。**
+    func fetch(name: String) async -> Nutrition? {
+        guard NutritionAPIConfig.isEnabled else { return nil }
+        guard let url = requestURL(name: name) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else { return nil }
+            let decoded = try JSONDecoder().decode(ExternalNutritionResponse.self, from: data)
+            return decoded.firstNutrition
+        } catch {
+            // 网络失败 / 格式不符 / 超时：一律静默回退
+            return nil
+        }
+    }
+
+    /// baseURL 需要是完整 URL（含 scheme 与 path），例如 `https://api.example.com/v1/food`。
+    private func requestURL(name: String) -> URL? {
+        guard var components = URLComponents(string: NutritionAPIConfig.baseURL) else { return nil }
+        var items = components.queryItems ?? []
+        items.append(URLQueryItem(name: "name", value: name))
+        items.append(URLQueryItem(name: "apiKey", value: NutritionAPIConfig.apiKey))
+        components.queryItems = items
+        return components.url
+    }
 }
 
-/// 预览宿主：注入一个内存 ModelContext，否则点「解析」时会因为取不到 context 崩。
-@MainActor
-private struct ExerciseInputPreviewHost: View {
-    private let context = try! SeedData.makePreviewContext()
+/// 外部服务返回结构的**占位模型**。字段按通用营养 API 的常见命名定义，
+/// 接入真实服务时按对方文档调整即可。
+struct ExternalNutritionResponse: Decodable {
 
-    var body: some View {
-        ExerciseInputSheet(dayIdentifier: DayIdentifier.today, weightKg: 70)
-            .modelContext(context)
+    struct Item: Decodable {
+        let name: String?
+        let calories: Double?
+        let protein_g: Double?
+        let fat_g: Double?
+        let carbohydrates_g: Double?
+        let calcium_mg: Double?
+        let iron_mg: Double?
+        let vitamin_c_mg: Double?
+        let fiber_g: Double?
+
+        var nutrition: Nutrition {
+            Nutrition(kcal: calories ?? 0,
+                      proteinG: protein_g ?? 0,
+                      fatG: fat_g ?? 0,
+                      carbsG: carbohydrates_g ?? 0,
+                      calciumMG: calcium_mg ?? 0,
+                      ironMG: iron_mg ?? 0,
+                      vitaminCMG: vitamin_c_mg ?? 0,
+                      fiberG: fiber_g ?? 0)
+        }
+    }
+
+    /// 有的服务返回数组，有的返回对象；两种都兼容。
+    let items: [Item]?
+    let item: Item?
+
+    var firstNutrition: Nutrition? {
+        if let item { return item.nutrition }
+        return items?.first?.nutrition
     }
 }
